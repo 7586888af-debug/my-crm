@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>CRM</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<style>
+  :root{
+    --bg: var(--tg-theme-bg-color, #ffffff);
+    --text: var(--tg-theme-text-color, #111111);
+    --hint: var(--tg-theme-hint-color, #999999);
+    --link: var(--tg-theme-link-color, #2481cc);
+    --button: var(--tg-theme-button-color, #2481cc);
+    --button-text: var(--tg-theme-button-text-color, #ffffff);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #f2f2f7);
+    --card-bg: #ffffff;
+    --border: #e4e4e8;
+    --danger: #e0523f;
+    --success: #34a853;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    background:var(--secondary-bg); color:var(--text); padding-bottom:70px;
+  }
+  header{
+    position:sticky; top:0; z-index:10; background:var(--bg); padding:14px 16px 10px;
+    border-bottom:1px solid var(--border);
+  }
+  header h1{font-size:18px; margin:0 0 10px;}
+  .search-row{display:flex; gap:8px;}
+  input, select, textarea{
+    font-size:15px; padding:10px 12px; border-radius:10px; border:1px solid var(--border);
+    background:var(--bg); color:var(--text); width:100%;
+  }
+  textarea{resize:vertical; min-height:60px;}
+  main{padding:12px;}
+  .view{display:none;}
+  .view.active{display:block;}
+  .card{
+    background:var(--card-bg); border-radius:14px; padding:14px; margin-bottom:10px;
+    box-shadow:0 1px 2px rgba(0,0,0,0.05); border:1px solid var(--border);
+  }
+  .card h3{margin:0 0 4px; font-size:16px;}
+  .card .meta{color:var(--hint); font-size:13px; margin-bottom:6px;}
+  .row{display:flex; justify-content:space-between; align-items:center; gap:8px;}
+  .pill{
+    display:inline-block; font-size:12px; padding:3px 9px; border-radius:20px;
+    background:var(--secondary-bg); color:var(--text); border:1px solid var(--border);
+  }
+  .btn{
+    background:var(--button); color:var(--button-text); border:none; border-radius:10px;
+    padding:10px 14px; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  .btn.secondary{background:var(--secondary-bg); color:var(--text); border:1px solid var(--border);}
+  .btn.danger{background:var(--danger); color:#fff;}
+  .btn.small{padding:6px 10px; font-size:12px; border-radius:8px;}
+  .btn.block{width:100%; margin-top:8px;}
+  .fab{
+    position:fixed; right:16px; bottom:80px; width:52px; height:52px; border-radius:50%;
+    background:var(--button); color:var(--button-text); font-size:26px; border:none;
+    box-shadow:0 4px 10px rgba(0,0,0,0.2); cursor:pointer; z-index:20;
+  }
+  nav.bottom{
+    position:fixed; bottom:0; left:0; right:0; display:flex; background:var(--bg);
+    border-top:1px solid var(--border); z-index:20;
+  }
+  nav.bottom button{
+    flex:1; background:none; border:none; padding:8px 2px; font-size:11px; color:var(--hint);
+    display:flex; flex-direction:column; align-items:center; gap:2px; cursor:pointer;
+  }
+  nav.bottom button.active{color:var(--button); font-weight:700;}
+  nav.bottom .icon{font-size:19px;}
+  .empty{text-align:center; color:var(--hint); padding:40px 10px; font-size:14px;}
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,0.45); z-index:50; display:none;
+    align-items:flex-end; justify-content:center;
+  }
+  .modal-overlay.open{display:flex;}
+  .modal{
+    background:var(--bg); width:100%; max-width:480px; border-radius:16px 16px 0 0;
+    padding:18px 16px 24px; max-height:88vh; overflow-y:auto;
+  }
+  .modal h2{margin:0 0 12px; font-size:18px;}
+  .field{margin-bottom:10px;}
+  .field label{display:block; font-size:12px; color:var(--hint); margin-bottom:4px;}
+  .modal-actions{display:flex; gap:8px; margin-top:14px;}
+  .modal-actions .btn{flex:1;}
+  .kanban{display:flex; flex-direction:column; gap:14px;}
+  .kanban-col h4{margin:0 0 8px; font-size:14px; display:flex; justify-content:space-between;}
+  .deal-card{
+    background:var(--card-bg); border:1px solid var(--border); border-radius:10px;
+    padding:10px; margin-bottom:8px;
+  }
+  .deal-card .amount{font-weight:700;}
+  .deal-actions{display:flex; gap:6px; margin-top:6px; flex-wrap:wrap;}
+  .stat-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px;}
+  .stat-box{background:var(--card-bg); border:1px solid var(--border); border-radius:14px; padding:14px; text-align:center;}
+  .stat-box .num{font-size:22px; font-weight:700;}
+  .stat-box .label{font-size:12px; color:var(--hint); margin-top:2px;}
+  .touch-item{border-left:3px solid var(--button); padding:6px 10px; margin-bottom:6px; background:var(--secondary-bg); border-radius:0 8px 8px 0;}
+  .touch-item .meta{font-size:11px; color:var(--hint);}
+  .banner{
+    background:#fff7e6; border:1px solid #f0d18a; color:#8a6d1a; border-radius:10px;
+    padding:10px 12px; font-size:13px; margin-bottom:12px;
+  }
+  .link-row{color:var(--link); font-size:13px; cursor:pointer; margin-top:4px;}
+  .top-actions{display:flex; gap:8px; margin-bottom:10px;}
+  .top-actions .btn{flex:1;}
+  #screen-loading{padding:60px 20px; text-align:center; color:var(--hint);}
+  .tabbar-top{display:flex; gap:6px; margin-bottom:10px; overflow-x:auto;}
+  .tabbar-top button{
+    white-space:nowrap; padding:6px 12px; border-radius:20px; border:1px solid var(--border);
+    background:var(--card-bg); color:var(--text); font-size:13px; cursor:pointer;
+  }
+  .tabbar-top button.active{background:var(--button); color:var(--button-text); border-color:var(--button);}
+</style>
+</head>
+<body>
+
+<div id="config-missing" class="banner" style="display:none; margin:14px;">
+  ⚠️ Не настроен Supabase. Откройте app.js (внизу index.html) и впишите SUPABASE_URL и SUPABASE_ANON_KEY. Инструкция — в файле SETUP.md.
+</div>
+
+<div id="screen-loading">Загрузка…</div>
+
+<div id="app" style="display:none;">
+  <header>
+    <div class="row">
+      <h1 id="header-title">CRM</h1>
+      <button class="btn small secondary" id="btn-calendar">📅 …</button>
+    </div>
+    <div class="search-row" id="search-row" style="display:none;">
+      <input id="global-search" placeholder="Поиск по имени, телефону...">
+    </div>
+  </header>
+
+  <main>
+
+    <!-- КОНТАКТЫ -->
+    <section class="view active" id="view-contacts">
+      <div class="top-actions">
+        <button class="btn secondary" id="btn-import-csv">⬆ Импорт CSV</button>
+        <button class="btn secondary" id="btn-pick-contact" style="display:none;">📱 Из телефона</button>
+        <input type="file" id="csv-file" accept=".csv" style="display:none;">
+      </div>
+      <div class="top-actions" id="contacts-filters">
+        <select id="filter-project"><option value="">Все проекты</option></select>
+        <select id="filter-stage"><option value="">Все этапы</option></select>
+      </div>
+      <div id="contacts-list"></div>
+    </section>
+
+    <!-- СДЕЛКИ -->
+    <section class="view" id="view-deals">
+      <div class="tabbar-top" id="deals-project-filter"></div>
+      <div class="kanban" id="kanban"></div>
+    </section>
+
+    <!-- ЗАДАЧИ -->
+    <section class="view" id="view-tasks">
+      <div class="tabbar-top" id="tasks-filter">
+        <button data-f="all" class="active">Все</button>
+        <button data-f="today">Сегодня</button>
+        <button data-f="overdue">Просрочено</button>
+        <button data-f="done">Выполнено</button>
+      </div>
+      <div id="tasks-list"></div>
+    </section>
+
+    <!-- МЕРОПРИЯТИЯ -->
+    <section class="view" id="view-events">
+      <div id="events-list"></div>
+    </section>
+
+    <!-- РЕГИСТРАЦИЯ (открывается по deep-link) -->
+    <section class="view" id="view-register">
+      <div class="card" id="register-card"></div>
+    </section>
+
+    <!-- СТАТИСТИКА -->
+    <section class="view" id="view-stats">
+      <div id="stat-grid"></div>
+      <div class="card">
+        <h3>Топ клиентов по числу касаний</h3>
+        <div id="top-touches"></div>
+      </div>
+      <div class="card">
+        <h3>Ближайшие задачи</h3>
+        <div id="upcoming-tasks"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <button class="fab" id="fab-add">+</button>
+
+  <nav class="bottom">
+    <button data-view="contacts" class="active"><span class="icon">👤</span>Контакты</button>
+    <button data-view="deals"><span class="icon">💼</span>Сделки</button>
+    <button data-view="tasks"><span class="icon">✅</span>Задачи</button>
+    <button data-view="events"><span class="icon">📅</span>События</button>
+    <button data-view="stats"><span class="icon">📊</span>Статистика</button>
+  </nav>
+</div>
+
+<!-- MODAL: универсальное окно -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal" id="modal-body"></div>
+</div>
+
+<script>
+// ==================================================================
+// НАСТРОЙКА: впишите данные вашего проекта Supabase (см. SETUP.md)
+// ==================================================================
+const CONFIG = {
+  SUPABASE_URL: "https://lrqmyxlshrqbtzffjkyi.supabase.co",
+  SUPABASE_ANON_KEY: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxycW15eGxzaHJxYnR6ZmZqa3lpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwNDgzNjEsImV4cCI6MjA5ODYyNDM2MX0.j0NZTmflbjkjOnUbcwMCzix8I-W0t2EZ60PO0tOT-ng",
+  BOT_USERNAME: "",       // username бота без @, например: my_crm_bot
+  MINIAPP_SHORTNAME: "",  // короткое имя Mini App, которое вы зададите в BotFather (App Name/short_name)
+  GOOGLE_CLIENT_ID: ""    // OAuth Client ID из Google Cloud Console (см. SETUP.md, шаг с Google Calendar)
+};
+</script>
+<script src="app.js"></script>
+</body>
+</html>
