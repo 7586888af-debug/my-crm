@@ -48,6 +48,7 @@ const TOUCH_TYPES = [
   'другое',
 ];
 
+// Из вашего листа "Правила CRM": что делать дальше по последнему касанию.
 const NEXT_ACTION_MAP = {
   'звонок/переписка первичная': 'Назначить встречу',
   'звонок/переписка повторная': 'Назначить встречу',
@@ -60,6 +61,8 @@ const NEXT_ACTION_MAP = {
 };
 
 const DIRECTIONS = ['предприниматель', 'фрилансер', 'клиент+партнер', 'не знаю'];
+
+// -------------------------- ИНИЦИАЛИЗАЦИЯ --------------------------
 
 async function init() {
   if (tg) {
@@ -77,14 +80,22 @@ async function init() {
 
   sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 
+  // Запоминаем chat_id владельца CRM (вас) — он нужен Edge Function
+  // task-reminders, чтобы знать, кому в Telegram слать напоминания о задачах.
+  if (tgUser && tgUser.id) {
+    sb.from('settings').upsert({ id: 1, owner_chat_id: String(tgUser.id) }).then(() => {}, () => {});
+  }
+
   bindUI();
   setupContactPicker();
 
+  // Обработка возврата из OAuth Google (см. SETUP.md): если пришли с ?gcal=connected
   const params = new URLSearchParams(window.location.search);
   if (params.get('gcal') === 'connected' && tg && tg.showPopup) {
     tg.showPopup({ title: 'Google Calendar', message: 'Календарь подключен', buttons: [{ type: 'close' }] });
   }
 
+  // Проверяем deep-link на регистрацию: startapp=event_<id>
   const startParam = tg && tg.initDataUnsafe ? tg.initDataUnsafe.start_param : null;
   if (startParam && startParam.indexOf('event_') === 0) {
     const eventId = startParam.replace('event_', '');
@@ -116,6 +127,8 @@ async function refreshAll() {
   renderCurrentView();
 }
 
+// -------------------------- НАВИГАЦИЯ --------------------------
+
 function bindUI() {
   document.querySelectorAll('nav.bottom button').forEach(btn => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
@@ -128,6 +141,11 @@ function bindUI() {
     document.getElementById('csv-file').click();
   });
   document.getElementById('csv-file').addEventListener('change', handleCsvImport);
+  document.getElementById('btn-import-touches').addEventListener('click', () => {
+    document.getElementById('touches-csv-file').click();
+  });
+  document.getElementById('touches-csv-file').addEventListener('change', handleTouchesCsvImport);
+  document.getElementById('btn-pick-telegram').addEventListener('click', pickContactFromTelegram);
   document.getElementById('global-search').addEventListener('input', (e) => {
     renderContacts(e.target.value);
   });
@@ -175,6 +193,8 @@ function onFabClick() {
   else if (state.view === 'tasks') openTaskForm();
   else if (state.view === 'events') openEventForm();
 }
+
+// -------------------------- УТИЛИТЫ --------------------------
 
 function esc(s) {
   if (s === null || s === undefined) return '';
@@ -232,6 +252,10 @@ function closeModal() {
 function selectOptions(values, selected) {
   return values.map(v => `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(v)}</option>`).join('');
 }
+
+// ============================================================
+// КОНТАКТЫ
+// ============================================================
 
 function renderContacts(filter) {
   const list = document.getElementById('contacts-list');
@@ -329,11 +353,16 @@ function openContactDetail(id) {
   const touches = touchesForContact(id);
   const deals = dealsForContact(id);
   const tasks = tasksForContact(id);
+  const meetings = tasks.filter(t => t.kind === 'встреча');
+  const plainTasks = tasks.filter(t => t.kind !== 'встреча');
   const lastTouch = lastTouchForContact(id);
   const nextAction = lastTouch ? NEXT_ACTION_MAP[lastTouch.type] : 'Первое касание';
   const overdue = isContactOverdue(id);
   openModal(`
-    <h2>${esc(c.name)}</h2>
+    <div class="row">
+      <h2 style="margin:0;">${esc(c.name)}</h2>
+      <span class="pill">Касаний: ${touches.length}</span>
+    </div>
     <div class="meta">${esc(c.phone || 'телефон не указан')} ${c.telegram_username ? '· @' + esc(c.telegram_username) : ''} ${c.city ? '· ' + esc(c.city) : ''}</div>
     <div class="meta">${esc(c.email || '')} ${c.direction ? '· ' + esc(c.direction) : ''}</div>
     <p style="font-size:14px;">${esc(c.notes || '')}</p>
@@ -364,10 +393,20 @@ function openContactDetail(id) {
     </div>
 
     <div class="row" style="margin:14px 0 4px;">
-      <strong style="font-size:14px;">Задачи и встречи (${tasks.length})</strong>
-      <button class="btn small" onclick="openTaskForm('${id}')">+ Задача</button>
+      <strong style="font-size:14px;">Встречи (${meetings.length})</strong>
+      <button class="btn small" onclick="openTaskForm('${id}', 'встреча')">+ Встреча</button>
     </div>
-    <div>${tasks.length ? tasks.map(t => `<div class="meta">${t.completed ? '✅' : (t.kind === 'встреча' ? '🤝' : '⏳')} ${esc(t.title)} ${t.due_date ? '— ' + fmtDate(t.due_date) : ''} ${t.google_event_id ? '· в календаре' : ''}</div>`).join('') : '<div class="meta">Нет задач</div>'}</div>
+    <div>${meetings.length ? meetings.map(t => `
+      <div class="meta">${t.completed ? '✅' : '🤝'} ${esc(t.title)} ${t.due_date ? '— ' + fmtDateTime(t.due_date) : ''} ${t.location ? '· ' + esc(t.location) : ''} ${t.google_event_id ? '· 📅 в календаре' : (t.due_date ? '· 📅 не синхронизировано' : '')}</div>
+    `).join('') : '<div class="meta">Встреч не запланировано</div>'}</div>
+
+    <div class="row" style="margin:14px 0 4px;">
+      <strong style="font-size:14px;">Задачи (${plainTasks.length})</strong>
+      <button class="btn small" onclick="openTaskForm('${id}', 'задача')">+ Задача</button>
+    </div>
+    <div>${plainTasks.length ? plainTasks.map(t => `
+      <div class="meta">${t.completed ? '✅' : '⏳'} ${esc(t.title)} ${t.due_date ? '— ' + fmtDateTime(t.due_date) : ''} ${(!t.completed && t.due_date) ? (t.reminder_sent ? '· 🔔 напоминание отправлено' : '· 🔔 напомним в боте') : ''}</div>
+    `).join('') : '<div class="meta">Нет задач</div>'}</div>
 
     <div class="modal-actions">
       <button class="btn secondary" onclick="openContactForm(${JSON.stringify(c).replace(/"/g, '&quot;')})">Изменить</button>
@@ -399,6 +438,12 @@ async function saveTouch(contactId) {
   openContactDetail(contactId);
 }
 
+// -------- Быстрое добавление из телефонной книги --------
+// Работает только там, где браузер поддерживает Contact Picker API —
+// на практике это Chrome/WebView на Android. На iOS и десктопе Telegram
+// такого API нет (сама платформа Telegram не даёт мини-приложениям
+// доступа к чужим контактам — это ограничение из соображений приватности),
+// поэтому там кнопка скрыта и добавление делается вручную через форму.
 function setupContactPicker() {
   const btn = document.getElementById('btn-pick-contact');
   if (navigator.contacts && navigator.contacts.select && navigator.ContactsManager) {
@@ -421,6 +466,43 @@ async function pickContactFromPhone() {
     alert('Не удалось открыть контакты телефона: ' + e.message);
   }
 }
+
+// -------- Быстрое добавление из Telegram --------
+// Полноценного API "выбрать любой чужой контакт в Telegram" у мини-приложений
+// нет (это сознательное ограничение приватности площадки). Поэтому кнопка
+// делает то, что реально доступно:
+//  1) если мини-апп открыт из чата/группы через меню вложений — Telegram
+//     передаёт данные этого чата в initDataUnsafe.chat, подставляем их;
+//  2) иначе предлагаем вставить username из буфера обмена (скопировали
+//     из профиля контакта в Telegram — вставили сюда одной кнопкой);
+//  3) если и это недоступно — просто открываем пустую форму, username/телефон
+//     вводятся вручную.
+async function pickContactFromTelegram() {
+  const chat = tg && tg.initDataUnsafe ? tg.initDataUnsafe.chat : null;
+  if (chat && (chat.type === 'private' || chat.username || chat.first_name)) {
+    openContactForm({
+      name: [chat.first_name, chat.last_name].filter(Boolean).join(' ') || chat.title || '',
+      telegram_username: chat.username || '',
+    });
+    return;
+  }
+  if (navigator.clipboard && navigator.clipboard.readText) {
+    try {
+      let text = (await navigator.clipboard.readText() || '').trim();
+      if (text) {
+        text = text.replace(/^https?:\/\/t\.me\//i, '').replace(/^@/, '');
+        openContactForm({ telegram_username: text });
+        return;
+      }
+    } catch (e) {
+      // доступ к буферу не дали — просто откроем пустую форму ниже
+    }
+  }
+  alert('Скопируйте username или телефон контакта в Telegram, затем нажмите эту кнопку ещё раз — поле подставится автоматически. Либо просто заполните форму вручную.');
+  openContactForm({});
+}
+
+// -------- CSV импорт контактов --------
 
 function handleCsvImport(e) {
   const file = e.target.files[0];
@@ -487,6 +569,128 @@ async function runCsvImport() {
   alert('Импортировано контактов: ' + payload.length);
   await refreshAll();
 }
+
+// -------- Импорт истории касаний из CSV --------
+// Отдельный флоу для листа вроде "Касания" в вашей таблице: там одна строка =
+// одно касание клиента, а не карточка контакта. Сопоставляем строки с уже
+// существующими контактами по телефону (точнее) или по имени, и пишем
+// в touches — с реальной датой касания из файла, если она есть.
+
+function handleTouchesCsvImport(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  Papa.parse(file, {
+    header: true,
+    skipEmptyLines: true,
+    complete: (results) => {
+      const rows = results.data;
+      if (!rows.length) { alert('Файл пуст или не распознан'); return; }
+      openTouchesCsvMapping(rows, Object.keys(rows[0]));
+    },
+    error: (err) => alert('Ошибка чтения CSV: ' + err.message),
+  });
+  e.target.value = '';
+}
+
+function openTouchesCsvMapping(rows, columns) {
+  window.__touchRows = rows;
+  const guess = (needle) => columns.find(c => c.toLowerCase().includes(needle)) || '';
+  const colOptions = (preselect) => '<option value="">— не использовать —</option>' +
+    columns.map(c => `<option value="${esc(c)}" ${c === preselect ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  openModal(`
+    <h2>Импорт истории касаний (${rows.length} строк)</h2>
+    <p class="meta">Каждая строка файла — одно касание. Сопоставьте колонки вашего листа с полями CRM. Контакт ищется по телефону, а если не найден — по имени среди уже существующих контактов (сначала импортируйте контакты).</p>
+    <div class="field"><label>Имя контакта</label><select id="tmap-name">${colOptions(guess('имя') || guess('фио') || guess('клиент'))}</select></div>
+    <div class="field"><label>Телефон контакта</label><select id="tmap-phone">${colOptions(guess('телеф'))}</select></div>
+    <div class="field"><label>Дата касания</label><select id="tmap-date">${colOptions(guess('дат'))}</select></div>
+    <div class="field"><label>Тип касания</label><select id="tmap-type">${colOptions(guess('тип'))}</select></div>
+    <div class="field"><label>Комментарий</label><select id="tmap-note">${colOptions(guess('коммент') || guess('примеч'))}</select></div>
+    <div class="modal-actions">
+      <button class="btn secondary" onclick="closeModal()">Отмена</button>
+      <button class="btn" onclick="runTouchesCsvImport()">Импортировать</button>
+    </div>
+  `);
+}
+
+function normalizePhone(p) {
+  let digits = (p || '').toString().replace(/[^\d]/g, '');
+  if (digits.length === 11 && digits[0] === '8') digits = '7' + digits.slice(1);
+  return digits;
+}
+
+function parseFlexibleDate(raw) {
+  if (!raw) return null;
+  const s = String(raw).trim();
+  if (!s) return null;
+  let m = s.match(/^(\d{1,2})\.(\d{1,2})\.(\d{2,4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (m) {
+    let [, d, mo, y, h, mi, se] = m;
+    if (y.length === 2) y = '20' + y;
+    const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h || 0), Number(mi || 0), Number(se || 0));
+    if (!isNaN(dt)) return dt;
+  }
+  const dt2 = new Date(s);
+  if (!isNaN(dt2)) return dt2;
+  return null;
+}
+
+async function runTouchesCsvImport() {
+  const nameCol = document.getElementById('tmap-name').value;
+  const phoneCol = document.getElementById('tmap-phone').value;
+  const dateCol = document.getElementById('tmap-date').value;
+  const typeCol = document.getElementById('tmap-type').value;
+  const noteCol = document.getElementById('tmap-note').value;
+  if (!nameCol && !phoneCol) { alert('Укажите хотя бы колонку с именем или телефоном — иначе не с кем сопоставить касания'); return; }
+
+  const rows = window.__touchRows || [];
+  const byPhone = {};
+  const byName = {};
+  state.contacts.forEach(c => {
+    if (c.phone) { const n = normalizePhone(c.phone); if (n) byPhone[n] = c.id; }
+    if (c.name) {
+      const key = c.name.toString().toLowerCase().trim();
+      (byName[key] = byName[key] || []).push(c.id);
+    }
+  });
+
+  const toInsert = [];
+  let notFound = 0, ambiguous = 0;
+  rows.forEach(r => {
+    let contactId = null;
+    if (phoneCol && r[phoneCol]) {
+      const norm = normalizePhone(r[phoneCol]);
+      if (norm && byPhone[norm]) contactId = byPhone[norm];
+    }
+    if (!contactId && nameCol && r[nameCol]) {
+      const key = r[nameCol].toString().toLowerCase().trim();
+      const matches = byName[key];
+      if (matches && matches.length === 1) contactId = matches[0];
+      else if (matches && matches.length > 1) ambiguous++;
+    }
+    if (!contactId) { notFound++; return; }
+
+    const rawType = typeCol ? (r[typeCol] || '').toString().trim().toLowerCase() : '';
+    const type = TOUCH_TYPES.find(t => t === rawType) || TOUCH_TYPES.find(t => rawType && rawType.includes(t)) || 'другое';
+    const dt = dateCol ? parseFlexibleDate(r[dateCol]) : null;
+    const obj = { contact_id: contactId, type, note: noteCol ? (r[noteCol] || '').toString().trim() : '' };
+    if (dt) obj.created_at = dt.toISOString();
+    toInsert.push(obj);
+  });
+
+  closeModal();
+  const CHUNK = 200;
+  for (let i = 0; i < toInsert.length; i += CHUNK) {
+    await sb.from('touches').insert(toInsert.slice(i, i + CHUNK));
+  }
+  alert('Импортировано касаний: ' + toInsert.length +
+    '\nНе найден контакт: ' + notFound +
+    (ambiguous ? '\nНеоднозначных совпадений по имени (пропущены): ' + ambiguous : ''));
+  await refreshAll();
+}
+
+// ============================================================
+// ВОРОНКА (СДЕЛКИ)
+// ============================================================
 
 function renderDeals() {
   const filterEl = document.getElementById('deals-project-filter');
@@ -571,6 +775,10 @@ async function deleteDeal(id) {
   await refreshAll();
 }
 
+// ============================================================
+// ЗАДАЧИ И ВСТРЕЧИ
+// ============================================================
+
 function renderTasks() {
   const el = document.getElementById('tasks-list');
   const now = new Date();
@@ -593,7 +801,9 @@ function renderTasks() {
         <input type="checkbox" ${t.completed ? 'checked' : ''} onchange="toggleTask('${t.id}', this.checked)">
       </div>
       <div class="meta">${t.due_date ? 'Срок: ' + fmtDateTime(t.due_date) : 'Без срока'} ${t.contact_id ? '· ' + esc(contactName(t.contact_id)) : ''} ${t.location ? '· ' + esc(t.location) : ''}</div>
-      <div class="meta">${t.google_event_id ? '📅 синхронизировано с Google Calendar' : (t.due_date ? '📅 не синхронизировано' : '')}</div>
+      <div class="meta">${t.kind === 'встреча'
+        ? (t.google_event_id ? '📅 синхронизировано с Google Calendar' : (t.due_date ? '📅 не синхронизировано' : ''))
+        : (t.due_date ? (t.completed ? '' : (t.reminder_sent ? '🔔 напоминание отправлено' : '🔔 напомним в боте')) : '')}</div>
       <div class="link-row" onclick="deleteTask('${t.id}')">Удалить</div>
     </div>
   `).join('');
@@ -613,22 +823,23 @@ async function deleteTask(id) {
   await refreshAll();
 }
 
-function openTaskForm(presetContactId) {
+function openTaskForm(presetContactId, presetKind) {
   const contactOptions = state.contacts.map(c => `<option value="${c.id}" ${presetContactId === c.id ? 'selected' : ''}>${esc(c.name)}</option>`).join('');
+  const kind = presetKind || 'задача';
   openModal(`
-    <h2>Новая задача / встреча</h2>
+    <h2>${kind === 'встреча' ? 'Новая встреча' : 'Новая задача'}</h2>
     <div class="field"><label>Тип</label>
       <select id="tk-kind" onchange="document.getElementById('tk-location-field').style.display = this.value==='встреча' ? 'block':'none';">
-        <option value="задача">Задача</option>
-        <option value="встреча">Встреча</option>
+        <option value="задача" ${kind === 'задача' ? 'selected' : ''}>Задача</option>
+        <option value="встреча" ${kind === 'встреча' ? 'selected' : ''}>Встреча</option>
       </select>
     </div>
     <div class="field"><label>Название *</label><input id="tk-title"></div>
     <div class="field"><label>Контакт</label><select id="tk-contact"><option value="">— без контакта —</option>${contactOptions}</select></div>
     <div class="field"><label>Срок</label><input id="tk-due" type="datetime-local"></div>
-    <div class="field" id="tk-location-field" style="display:none;"><label>Место встречи</label><input id="tk-location"></div>
+    <div class="field" id="tk-location-field" style="display:${kind === 'встреча' ? 'block' : 'none'};"><label>Место встречи</label><input id="tk-location"></div>
     <div class="field"><label>Длительность (мин)</label><input id="tk-duration" type="number" value="30"></div>
-    <p class="meta">Если указан срок — задача/встреча автоматически появится в вашем Google Calendar (после подключения календаря).</p>
+    <p class="meta">${kind === 'встреча' ? 'Встреча со сроком автоматически появится в вашем Google Calendar (после подключения календаря).' : 'Если указан срок — перед задачей придёт напоминание в этот бот в Telegram.'}</p>
     <div class="modal-actions">
       <button class="btn secondary" onclick="closeModal()">Отмена</button>
       <button class="btn" onclick="saveTask()">Сохранить</button>
@@ -652,11 +863,13 @@ async function saveTask() {
 
   closeModal();
 
-  if (inserted && due_date && state.calendarConnected) {
+  // В Google Calendar попадают только встречи — обычные задачи вместо этого
+  // напоминаются в Telegram-бота (см. Edge Function task-reminders).
+  if (inserted && due_date && kind === 'встреча' && state.calendarConnected) {
     const contact = state.contacts.find(c => c.id === contact_id);
     const res = await callCalendarSync({
       action: 'upsert',
-      title: (kind === 'встреча' ? 'Встреча: ' : 'Задача: ') + title + (contact ? ' — ' + contact.name : ''),
+      title: 'Встреча: ' + title + (contact ? ' — ' + contact.name : ''),
       description: location || '',
       start: due_date,
       duration_minutes,
@@ -668,6 +881,10 @@ async function saveTask() {
 
   await refreshAll();
 }
+
+// ============================================================
+// GOOGLE CALENDAR
+// ============================================================
 
 function functionsUrl(name) {
   return CONFIG.SUPABASE_URL.replace(/\/$/, '') + '/functions/v1/' + name;
@@ -713,6 +930,8 @@ function startGoogleAuth() {
     + '&access_type=offline'
     + '&prompt=consent'
     + '&scope=' + encodeURIComponent(scope);
+  // Google блокирует OAuth внутри встроенного браузера Telegram,
+  // поэтому ссылку обязательно открываем во внешнем системном браузере.
   if (tg && tg.openLink) {
     tg.openLink(url, { try_instant_view: false });
   } else {
@@ -736,6 +955,10 @@ async function callCalendarSync(payload) {
     return null;
   }
 }
+
+// ============================================================
+// МЕРОПРИЯТИЯ
+// ============================================================
 
 function renderEvents() {
   const el = document.getElementById('events-list');
@@ -804,6 +1027,8 @@ function shareEventLink(eventId) {
   }
   if (navigator.clipboard) navigator.clipboard.writeText(link).catch(() => {});
 }
+
+// -------- Форма регистрации на мероприятие (по deep-link) --------
 
 async function openRegisterView(eventId) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -886,6 +1111,10 @@ async function submitRegistration(eventId, tgUsername) {
   if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
 }
 
+// ============================================================
+// СТАТИСТИКА
+// ============================================================
+
 function uniqueContactsByTouchTypes(types) {
   const set = new Set();
   state.touches.forEach(t => { if (types.includes(t.type)) set.add(t.contact_id); });
@@ -952,4 +1181,5 @@ function renderStats() {
   ).join('') : '<div class="meta">Нет ближайших задач</div>';
 }
 
+// -------------------------- СТАРТ --------------------------
 init();

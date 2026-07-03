@@ -143,9 +143,14 @@
     <!-- КОНТАКТЫ -->
     <section class="view active" id="view-contacts">
       <div class="top-actions">
-        <button class="btn secondary" id="btn-import-csv">⬆ Импорт CSV</button>
-        <button class="btn secondary" id="btn-pick-contact" style="display:none;">📱 Из телефона</button>
+        <button class="btn secondary" id="btn-import-csv">⬆ Импорт контактов</button>
+        <button class="btn secondary" id="btn-import-touches">⬆ Импорт касаний</button>
         <input type="file" id="csv-file" accept=".csv" style="display:none;">
+        <input type="file" id="touches-csv-file" accept=".csv" style="display:none;">
+      </div>
+      <div class="top-actions">
+        <button class="btn secondary" id="btn-pick-contact" style="display:none;">📱 Из телефона</button>
+        <button class="btn secondary" id="btn-pick-telegram">📨 Из Telegram</button>
       </div>
       <div class="top-actions" id="contacts-filters">
         <select id="filter-project"><option value="">Все проекты</option></select>
@@ -200,7 +205,7 @@
 
   <nav class="bottom">
     <button data-view="contacts" class="active"><span class="icon">👤</span>Контакты</button>
-    <button data-view="deals"><span class="icon">💼</span>Сделки</button>
+    <button data-view="deals"><span class="icon">💼</span>Воронка</button>
     <button data-view="tasks"><span class="icon">✅</span>Задачи</button>
     <button data-view="events"><span class="icon">📅</span>События</button>
     <button data-view="stats"><span class="icon">📊</span>Статистика</button>
@@ -223,5 +228,7 @@ const CONFIG = {
   MINIAPP_SHORTNAME: "",  // короткое имя Mini App, которое вы зададите в BotFather (App Name/short_name)
   GOOGLE_CLIENT_ID: "1067076051378-mllqin29kbjtsj2dq5dthufpusu3tp5p.apps.googleusercontent.com"    // OAuth Client ID из Google Cloud Console (см. SETUP.md, шаг с Google Calendar)
 };
-</script></body>
+</script>
+<script src="app.js"></script>
+</body>
 </html>
