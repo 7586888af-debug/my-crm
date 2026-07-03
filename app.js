@@ -2,7 +2,7 @@
 // CRM Mini App — основная логика
 // ==========================================================================
 
-let supabase = null;
+let sb = null;
 let tg = window.Telegram ? window.Telegram.WebApp : null;
 let tgUser = null;
 let state = {
@@ -48,7 +48,6 @@ const TOUCH_TYPES = [
   'другое',
 ];
 
-// Из вашего листа "Правила CRM": что делать дальше по последнему касанию.
 const NEXT_ACTION_MAP = {
   'звонок/переписка первичная': 'Назначить встречу',
   'звонок/переписка повторная': 'Назначить встречу',
@@ -61,8 +60,6 @@ const NEXT_ACTION_MAP = {
 };
 
 const DIRECTIONS = ['предприниматель', 'фрилансер', 'клиент+партнер', 'не знаю'];
-
-// -------------------------- ИНИЦИАЛИЗАЦИЯ --------------------------
 
 async function init() {
   if (tg) {
@@ -78,18 +75,16 @@ async function init() {
     return;
   }
 
-  supabase = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+  sb = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
 
   bindUI();
   setupContactPicker();
 
-  // Обработка возврата из OAuth Google (см. SETUP.md): если пришли с ?gcal=connected
   const params = new URLSearchParams(window.location.search);
   if (params.get('gcal') === 'connected' && tg && tg.showPopup) {
     tg.showPopup({ title: 'Google Calendar', message: 'Календарь подключен', buttons: [{ type: 'close' }] });
   }
 
-  // Проверяем deep-link на регистрацию: startapp=event_<id>
   const startParam = tg && tg.initDataUnsafe ? tg.initDataUnsafe.start_param : null;
   if (startParam && startParam.indexOf('event_') === 0) {
     const eventId = startParam.replace('event_', '');
@@ -107,11 +102,11 @@ async function init() {
 
 async function refreshAll() {
   const [c, d, t, ev, tc] = await Promise.all([
-    supabase.from('contacts').select('*').order('created_at', { ascending: false }),
-    supabase.from('deals').select('*').order('created_at', { ascending: false }),
-    supabase.from('tasks').select('*').order('due_date', { ascending: true }),
-    supabase.from('events').select('*').order('event_date', { ascending: true }),
-    supabase.from('touches').select('*').order('created_at', { ascending: false }),
+    sb.from('contacts').select('*').order('created_at', { ascending: false }),
+    sb.from('deals').select('*').order('created_at', { ascending: false }),
+    sb.from('tasks').select('*').order('due_date', { ascending: true }),
+    sb.from('events').select('*').order('event_date', { ascending: true }),
+    sb.from('touches').select('*').order('created_at', { ascending: false }),
   ]);
   state.contacts = c.data || [];
   state.deals = d.data || [];
@@ -120,8 +115,6 @@ async function refreshAll() {
   state.touches = tc.data || [];
   renderCurrentView();
 }
-
-// -------------------------- НАВИГАЦИЯ --------------------------
 
 function bindUI() {
   document.querySelectorAll('nav.bottom button').forEach(btn => {
@@ -183,8 +176,6 @@ function onFabClick() {
   else if (state.view === 'events') openEventForm();
 }
 
-// -------------------------- УТИЛИТЫ --------------------------
-
 function esc(s) {
   if (s === null || s === undefined) return '';
   return String(s).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
@@ -241,10 +232,6 @@ function closeModal() {
 function selectOptions(values, selected) {
   return values.map(v => `<option value="${esc(v)}" ${v === selected ? 'selected' : ''}>${esc(v)}</option>`).join('');
 }
-
-// ============================================================
-// КОНТАКТЫ
-// ============================================================
 
 function renderContacts(filter) {
   const list = document.getElementById('contacts-list');
@@ -317,10 +304,10 @@ async function saveContact(id) {
   };
   if (!payload.name) { alert('Укажите имя'); return; }
   if (id) {
-    await supabase.from('contacts').update(payload).eq('id', id);
+    await sb.from('contacts').update(payload).eq('id', id);
   } else {
     payload.source = 'вручную';
-    await supabase.from('contacts').insert(payload);
+    await sb.from('contacts').insert(payload);
   }
   closeModal();
   await refreshAll();
@@ -328,10 +315,10 @@ async function saveContact(id) {
 
 async function deleteContact(id) {
   if (!confirm('Удалить контакт? Связанные сделки/задачи/касания тоже будут удалены.')) return;
-  await supabase.from('touches').delete().eq('contact_id', id);
-  await supabase.from('deals').delete().eq('contact_id', id);
-  await supabase.from('tasks').delete().eq('contact_id', id);
-  await supabase.from('contacts').delete().eq('id', id);
+  await sb.from('touches').delete().eq('contact_id', id);
+  await sb.from('deals').delete().eq('contact_id', id);
+  await sb.from('tasks').delete().eq('contact_id', id);
+  await sb.from('contacts').delete().eq('id', id);
   closeModal();
   await refreshAll();
 }
@@ -407,17 +394,11 @@ function openTouchForm(contactId) {
 async function saveTouch(contactId) {
   const type = document.getElementById('t-type').value;
   const note = document.getElementById('t-note').value.trim();
-  await supabase.from('touches').insert({ contact_id: contactId, type, note });
+  await sb.from('touches').insert({ contact_id: contactId, type, note });
   await refreshAll();
   openContactDetail(contactId);
 }
 
-// -------- Быстрое добавление из телефонной книги --------
-// Работает только там, где браузер поддерживает Contact Picker API —
-// на практике это Chrome/WebView на Android. На iOS и десктопе Telegram
-// такого API нет (сама платформа Telegram не даёт мини-приложениям
-// доступа к чужим контактам — это ограничение из соображений приватности),
-// поэтому там кнопка скрыта и добавление делается вручную через форму.
 function setupContactPicker() {
   const btn = document.getElementById('btn-pick-contact');
   if (navigator.contacts && navigator.contacts.select && navigator.ContactsManager) {
@@ -440,8 +421,6 @@ async function pickContactFromPhone() {
     alert('Не удалось открыть контакты телефона: ' + e.message);
   }
 }
-
-// -------- CSV импорт --------
 
 function handleCsvImport(e) {
   const file = e.target.files[0];
@@ -503,15 +482,11 @@ async function runCsvImport() {
   closeModal();
   const CHUNK = 200;
   for (let i = 0; i < payload.length; i += CHUNK) {
-    await supabase.from('contacts').insert(payload.slice(i, i + CHUNK));
+    await sb.from('contacts').insert(payload.slice(i, i + CHUNK));
   }
   alert('Импортировано контактов: ' + payload.length);
   await refreshAll();
 }
-
-// ============================================================
-// ВОРОНКА (СДЕЛКИ)
-// ============================================================
 
 function renderDeals() {
   const filterEl = document.getElementById('deals-project-filter');
@@ -554,7 +529,7 @@ function setDealsProjectFilter(p) {
 }
 
 async function moveDeal(id, stage) {
-  await supabase.from('deals').update({ stage, updated_at: new Date().toISOString() }).eq('id', id);
+  await sb.from('deals').update({ stage, updated_at: new Date().toISOString() }).eq('id', id);
   await refreshAll();
 }
 
@@ -583,22 +558,18 @@ async function saveDeal(id) {
     stage: document.getElementById('d-stage').value,
     updated_at: new Date().toISOString(),
   };
-  if (id) await supabase.from('deals').update(payload).eq('id', id);
-  else await supabase.from('deals').insert(payload);
+  if (id) await sb.from('deals').update(payload).eq('id', id);
+  else await sb.from('deals').insert(payload);
   closeModal();
   await refreshAll();
 }
 
 async function deleteDeal(id) {
   if (!confirm('Удалить сделку?')) return;
-  await supabase.from('deals').delete().eq('id', id);
+  await sb.from('deals').delete().eq('id', id);
   closeModal();
   await refreshAll();
 }
-
-// ============================================================
-// ЗАДАЧИ И ВСТРЕЧИ
-// ============================================================
 
 function renderTasks() {
   const el = document.getElementById('tasks-list');
@@ -629,7 +600,7 @@ function renderTasks() {
 }
 
 async function toggleTask(id, completed) {
-  await supabase.from('tasks').update({ completed }).eq('id', id);
+  await sb.from('tasks').update({ completed }).eq('id', id);
   await refreshAll();
 }
 async function deleteTask(id) {
@@ -638,7 +609,7 @@ async function deleteTask(id) {
   if (task && task.google_event_id) {
     await callCalendarSync({ action: 'delete', google_event_id: task.google_event_id });
   }
-  await supabase.from('tasks').delete().eq('id', id);
+  await sb.from('tasks').delete().eq('id', id);
   await refreshAll();
 }
 
@@ -675,7 +646,7 @@ async function saveTask() {
   const dueRaw = document.getElementById('tk-due').value;
   const due_date = dueRaw ? new Date(dueRaw).toISOString() : null;
 
-  const { data: inserted } = await supabase.from('tasks').insert({
+  const { data: inserted } = await sb.from('tasks').insert({
     title, contact_id, kind, location, duration_minutes, due_date,
   }).select('*').single();
 
@@ -691,16 +662,12 @@ async function saveTask() {
       duration_minutes,
     });
     if (res && res.google_event_id) {
-      await supabase.from('tasks').update({ google_event_id: res.google_event_id }).eq('id', inserted.id);
+      await sb.from('tasks').update({ google_event_id: res.google_event_id }).eq('id', inserted.id);
     }
   }
 
   await refreshAll();
 }
-
-// ============================================================
-// GOOGLE CALENDAR
-// ============================================================
 
 function functionsUrl(name) {
   return CONFIG.SUPABASE_URL.replace(/\/$/, '') + '/functions/v1/' + name;
@@ -746,8 +713,6 @@ function startGoogleAuth() {
     + '&access_type=offline'
     + '&prompt=consent'
     + '&scope=' + encodeURIComponent(scope);
-  // Google блокирует OAuth внутри встроенного браузера Telegram,
-  // поэтому ссылку обязательно открываем во внешнем системном браузере.
   if (tg && tg.openLink) {
     tg.openLink(url, { try_instant_view: false });
   } else {
@@ -772,10 +737,6 @@ async function callCalendarSync(payload) {
   }
 }
 
-// ============================================================
-// МЕРОПРИЯТИЯ
-// ============================================================
-
 function renderEvents() {
   const el = document.getElementById('events-list');
   if (!state.events.length) {
@@ -796,7 +757,7 @@ function renderEvents() {
 }
 
 async function loadRegCount(eventId) {
-  const { count } = await supabase.from('event_registrations').select('*', { count: 'exact', head: true }).eq('event_id', eventId);
+  const { count } = await sb.from('event_registrations').select('*', { count: 'exact', head: true }).eq('event_id', eventId);
   const elx = document.getElementById('regcount-' + eventId);
   if (elx) elx.textContent = count ?? 0;
 }
@@ -819,7 +780,7 @@ async function saveEvent() {
   const title = document.getElementById('ev-title').value.trim();
   if (!title) { alert('Укажите название'); return; }
   const dueRaw = document.getElementById('ev-date').value;
-  await supabase.from('events').insert({
+  await sb.from('events').insert({
     title,
     event_date: dueRaw ? new Date(dueRaw).toISOString() : null,
     location: document.getElementById('ev-location').value.trim(),
@@ -844,15 +805,13 @@ function shareEventLink(eventId) {
   if (navigator.clipboard) navigator.clipboard.writeText(link).catch(() => {});
 }
 
-// -------- Форма регистрации на мероприятие (по deep-link) --------
-
 async function openRegisterView(eventId) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-register').classList.add('active');
   document.getElementById('header-title').textContent = 'Регистрация';
   document.getElementById('fab-add').style.display = 'none';
 
-  const { data: ev } = await supabase.from('events').select('*').eq('id', eventId).single();
+  const { data: ev } = await sb.from('events').select('*').eq('id', eventId).single();
   const card = document.getElementById('register-card');
   if (!ev) {
     card.innerHTML = '<div class="empty">Мероприятие не найдено</div>';
@@ -898,38 +857,34 @@ async function submitRegistration(eventId, tgUsername) {
   let contactId = null;
   const tgId = tgUser ? String(tgUser.id) : null;
   if (tgId) {
-    const { data: found } = await supabase.from('contacts').select('id').eq('telegram_user_id', tgId).limit(1);
+    const { data: found } = await sb.from('contacts').select('id').eq('telegram_user_id', tgId).limit(1);
     if (found && found.length) contactId = found[0].id;
   }
   if (!contactId && phone) {
-    const { data: found } = await supabase.from('contacts').select('id').eq('phone', phone).limit(1);
+    const { data: found } = await sb.from('contacts').select('id').eq('phone', phone).limit(1);
     if (found && found.length) contactId = found[0].id;
   }
   if (!contactId) {
-    const { data: inserted } = await supabase.from('contacts').insert({
+    const { data: inserted } = await sb.from('contacts').insert({
       name, phone, telegram_username: tgUsername || null,
       telegram_user_id: tgId, source: 'мероприятие',
     }).select('id').single();
     contactId = inserted ? inserted.id : null;
   }
 
-  await supabase.from('event_registrations').insert({
+  await sb.from('event_registrations').insert({
     event_id: eventId, contact_id: contactId, name, phone,
     telegram_username: tgUsername || null, telegram_user_id: tgId,
     referred_by, will_come, bringing_guest,
   });
 
   if (contactId) {
-    await supabase.from('touches').insert({ contact_id: contactId, type: 'регистрация', event_id: eventId });
+    await sb.from('touches').insert({ contact_id: contactId, type: 'регистрация', event_id: eventId });
   }
 
   document.getElementById('register-card').innerHTML = '<div class="empty">✅ Вы зарегистрированы! Можно закрыть окно.</div>';
   if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
 }
-
-// ============================================================
-// СТАТИСТИКА
-// ============================================================
 
 function uniqueContactsByTouchTypes(types) {
   const set = new Set();
@@ -997,5 +952,4 @@ function renderStats() {
   ).join('') : '<div class="meta">Нет ближайших задач</div>';
 }
 
-// -------------------------- СТАРТ --------------------------
 init();
